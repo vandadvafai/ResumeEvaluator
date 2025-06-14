@@ -28,7 +28,7 @@ A simple toolchain that lets you evaluate candidate resumes against a job descri
 1. **Clone the repo**
 
    ```bash
-   git clone https://github.com/your-org/resume-evaluator.git
+   git clone https://github.com/your-org/ResumeEvaluator.git
    cd resume-evaluator
    ```
 
