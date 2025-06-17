@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
 # main.py
+#!/usr/bin/env python3
 
 import os
 from io import BytesIO
@@ -11,8 +11,9 @@ from PyPDF2 import PdfReader
 from docx import Document
 from openai import OpenAI
 
-from resume_evaluator_api import load_api_key, evaluate_resume  # reuse helpers
+from resume_evaluator_api import load_api_key, evaluate_resume
 
+# Load API key and instantiate OpenAI client
 API_KEY = load_api_key()
 client  = OpenAI(api_key=API_KEY)
 
@@ -30,9 +31,12 @@ async def evaluate(
     resumes: List[UploadFile] = File(...)
 ):
     results = []
+
     for up in resumes:
         ext = os.path.splitext(up.filename)[1].lower()
         raw = await up.read()
+
+        # Extract text
         try:
             if ext == ".pdf":
                 reader = PdfReader(BytesIO(raw))
@@ -43,17 +47,31 @@ async def evaluate(
             elif ext == ".txt":
                 text = raw.decode("utf-8", errors="ignore")
             else:
-                raise ValueError("Unsupported file type")
+                raise ValueError(f"Unsupported file type: {ext}")
         except Exception as e:
-            results.append({"filename": up.filename, "error": f"Extraction failed: {e}"})
+            results.append({
+                "filename": up.filename,
+                "error": f"Could not extract text: {e}"
+            })
             continue
 
+        # Evaluate resume
         try:
             data = evaluate_resume(client, "gpt-4", job_description, text)
-            flag = "[green flag]" if data["verdict"]=="Strong Fit" else "[red flag]"
-            eval_str = f"{data['name']} - {data['match_score']}% match - {data['verdict']} {flag}"
-            results.append({"filename": up.filename, "evaluation": eval_str})
+            # Build summary and reasons list
+            flag = "[green flag]" if data.get("verdict") == "Strong Fit" else "[red flag]"
+            summary = f"{data.get('name')} - {data.get('match_score')}% match - {data.get('verdict')} {flag}"
+            reasons = data.get("green_flags", []) + data.get("red_flags", [])
+
+            results.append({
+                "filename": up.filename,
+                "summary": summary,
+                "reasons": reasons
+            })
         except Exception as e:
-            results.append({"filename": up.filename, "error": str(e)})
+            results.append({
+                "filename": up.filename,
+                "error": str(e)
+            })
 
     return {"results": results}
