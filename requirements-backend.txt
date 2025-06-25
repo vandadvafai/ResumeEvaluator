@@ -1,8 +1,7 @@
 fastapi
-uvicorn
+uvicorn[standard]
 python-dotenv
 openai
 PyPDF2
 python-docx
-streamlit
-requests
+python-multipart

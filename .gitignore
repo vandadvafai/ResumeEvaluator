@@ -5,5 +5,5 @@ venv/
 *.pyo
 *.pyd
 *.db
+venv/
 
-.env
