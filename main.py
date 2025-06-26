@@ -17,9 +17,15 @@ from resume_evaluator_api import load_api_key, evaluate_resume, generate_intervi
 
 # instantiate FastAPI
 app = FastAPI()
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8501"],
+    allow_origins=["http://localhost:8501", "https://your-frontend-domain.com"],
     allow_methods=["POST"],
     allow_headers=["*"],
 )
