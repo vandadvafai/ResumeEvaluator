@@ -4,10 +4,9 @@ import streamlit as st
 import requests
 
 # Allow override via ENV; default to host.docker.internal inside a container
-API_URL = os.getenv(
-    "API_URL",
-    "http://host.docker.internal:8000/evaluate/"
-)
+
+API_URL = os.getenv("API_URL", "http://localhost:8000/evaluate/")
+
 
 st.set_page_config(page_title="Resume Evaluator", layout="wide")
 

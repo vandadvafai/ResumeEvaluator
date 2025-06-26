@@ -25,7 +25,7 @@ async def health():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8501", "https://resume-eyval.streamlit.app"],
+    allow_origins=["https://resumeyval.com", "https://www.resumeyval.com"],
     allow_methods=["POST"],
     allow_headers=["*"],
 )
