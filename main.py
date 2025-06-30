@@ -24,26 +24,31 @@ from auth import (
     UserCreate, create_access_token, verify_password,
     get_current_user, ACCESS_TOKEN_EXPIRE_MINUTES, hash_password
 )
-from models import User, SubscriptionPlan, UserSubscription
+from models import (
+    User, SubscriptionPlan,
+    UserSubscription, EvaluationRun
+)
 from resume_evaluator_api import (
     load_api_key, evaluate_resume,
     generate_interview_questions
 )
 
-# instantiate FastAPI
 app = FastAPI()
 
-# 1️⃣ initialize your database once on startup
+# ─── 1️⃣ Initialize DB on startup ─────────────────────────────────────────────
+
 @app.on_event("startup")
 def on_startup():
     init_db()
 
-# 2️⃣ lightweight health check
+# ─── 2️⃣ Health check ─────────────────────────────────────────────────────────
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
-# 3️⃣ CORS
+# ─── 3️⃣ CORS only your front-end ──────────────────────────────────────────────
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -54,12 +59,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# compile suspicious-text patterns
+# ─── compile trick-detection regexes ──────────────────────────────────────────
+
 ZERO_WIDTH = re.compile(r'[\u200B\u200C\u200D\uFEFF]')
 WATERMARK  = re.compile(r'\bCONFIDENTIAL\b', re.IGNORECASE)
 WHITE_PDF  = re.compile(r'1\s+1\s+1\s+(rg|RG)')
 
-# load OpenAI client once
 API_KEY = load_api_key()
 client  = OpenAI(api_key=API_KEY)
 
@@ -67,12 +72,15 @@ client  = OpenAI(api_key=API_KEY)
 # ─── AUTH ROUTES ──────────────────────────────────────────────────────────────
 
 @app.post("/signup", status_code=201)
-def signup(user_in: UserCreate, db: Session = Depends(get_db)):
-    # check existing
-    if db.query(User).filter(User.email == user_in.email).first():
+def signup(
+    user_in: UserCreate,
+    db: Session = Depends(get_db)
+):
+    # prevent duplicate emails
+    if db.query(User).filter_by(email=user_in.email).first():
         raise HTTPException(400, "Email already registered")
 
-    # create user
+    # create user + default subscription
     user = User(
         email     = user_in.email,
         hashed_pw = hash_password(user_in.password)
@@ -81,8 +89,8 @@ def signup(user_in: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    # assign free plan by default
-    free_plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.name=="free").one()
+    free_plan = db.query(SubscriptionPlan)\
+                  .filter_by(name="free").one()
     sub = UserSubscription(user_id=user.id, plan_id=free_plan.id)
     db.add(sub)
     db.commit()
@@ -95,46 +103,61 @@ def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(User.email == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_pw):
+    user = db.query(User)\
+             .filter_by(email=form_data.username).first()
+    if not user or not verify_password(
+        form_data.password, user.hashed_pw
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token = create_access_token(
+
+    token = create_access_token(
         data={"sub": user.email},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+    return {"access_token": token, "token_type": "bearer"}
 
 
-# ─── EVALUATION ROUTE (protected) ─────────────────────────────────────────────
+# ─── EVALUATE (protected + usage limits) ─────────────────────────────────────
 
 @app.post("/evaluate/")
 async def evaluate(
-    job_description: str = Form(...),
-    resumes: List[UploadFile] = File(...),
-    current_user: User = Depends(get_current_user)   # <-- protection
+    job_description: str             = Form(...),
+    resumes: List[UploadFile]        = File(...),
+    current_user: User               = Depends(get_current_user),
+    db: Session                      = Depends(get_db),
 ):
-    plan_name = current_user.subscription.plan.name
-    results = []
+    # enforce per-plan runs
+    plan = current_user.subscription.plan
+    if plan.max_runs is not None:
+        used = db.query(EvaluationRun)\
+                 .filter_by(user_id=current_user.id)\
+                 .count()
+        if used >= plan.max_runs:
+            raise HTTPException(
+                status_code=403,
+                detail="Run limit reached; please upgrade your plan."
+            )
 
+    results = []
     for up in resumes:
         fname = up.filename
         ext   = os.path.splitext(fname)[1].lower()
         raw   = await up.read()
-        suspicious_flags: List[str] = []
+        flags = []
 
-        # 1) extract text & detect tricks
+        # 1) extract & trick-detect
         try:
             if ext == ".pdf":
                 reader = PdfReader(BytesIO(raw))
-                text   = "\n".join(p.extract_text() or "" for p in reader.pages)
-
-                raw_s = raw.decode("latin-1", errors="ignore")
-                if WHITE_PDF.search(raw_s):
-                    suspicious_flags.append("Hidden white text in PDF")
+                text   = "\n".join(
+                    p.extract_text() or "" for p in reader.pages
+                )
+                if WHITE_PDF.search(raw.decode("latin-1","ignore")):
+                    flags.append("Hidden white text in PDF")
 
             elif ext == ".docx":
                 doc = Document(BytesIO(raw))
@@ -142,44 +165,43 @@ async def evaluate(
                     for run in para.runs:
                         c = run.font.color
                         if c and c.rgb == RGBColor(0xFF,0xFF,0xFF):
-                            suspicious_flags.append("Hidden white text in DOCX")
+                            flags.append("Hidden white text in DOCX")
                             break
-                    if "Hidden white text in DOCX" in suspicious_flags:
+                    if "Hidden white text in DOCX" in flags:
                         break
                 text = "\n".join(p.text for p in doc.paragraphs)
 
             elif ext == ".txt":
-                text = raw.decode("utf-8", errors="ignore")
+                text = raw.decode("utf-8","ignore")
 
             else:
                 raise ValueError(f"Unsupported file type: {ext}")
 
             if ZERO_WIDTH.search(text):
-                suspicious_flags.append("Hidden/invisible characters")
+                flags.append("Hidden/invisible characters")
             if WATERMARK.search(text):
-                suspicious_flags.append("Watermark 'CONFIDENTIAL' detected")
+                flags.append("Watermark 'CONFIDENTIAL' detected")
 
         except Exception as e:
-            results.append({
-                "filename": fname,
-                "error": f"Extraction failed: {e}"
-            })
+            results.append({"filename": fname, "error": f"Extraction failed: {e}"})
             continue
 
-        # 2) call OpenAI to evaluate & generate questions
+        # 2) call OpenAI
         try:
-            eval_data = evaluate_resume(client, "gpt-4", job_description, text)
-            questions = generate_interview_questions(client, "gpt-4", job_description, text)
+            eval_data  = evaluate_resume(client, "gpt-4", job_description, text)
+            questions  = generate_interview_questions(client, "gpt-4", job_description, text)
 
             summary = (
-                f"{eval_data['name']} - {eval_data['match_score']}% match - "
-                f"{eval_data['verdict']} [{'green flag' if eval_data['verdict']=='Strong Fit' else 'red flag'}]"
+                f"{eval_data['name']} - "
+                f"{eval_data['match_score']}% match - "
+                f"{eval_data['verdict']} "
+                f"[{'green flag' if eval_data['verdict']=='Strong Fit' else 'red flag'}]"
             )
-            reasons = (eval_data.get("green_flags", []) + eval_data.get("red_flags", []))[:4]
+            reasons = (eval_data.get("green_flags",[]) + eval_data.get("red_flags",[]))[:4]
 
-            # enforce free-plan restrictions
-            if plan_name == "free":
-                reasons = reasons[:2]
+            # free plan sees only top 2 reasons, no questions
+            if plan.name == "free":
+                reasons   = reasons[:2]
                 questions = []
 
             results.append({
@@ -187,13 +209,15 @@ async def evaluate(
                 "summary": summary,
                 "reasons": reasons,
                 "interview_questions": questions[:5],
-                "suspicious_flags": suspicious_flags
+                "suspicious_flags": flags
             })
 
         except Exception as e:
-            results.append({
-                "filename": fname,
-                "error": str(e)
-            })
+            results.append({"filename": fname, "error": str(e)})
+
+    # 3) record this run
+    run = EvaluationRun(user_id=current_user.id)
+    db.add(run)
+    db.commit()
 
     return {"results": results}
