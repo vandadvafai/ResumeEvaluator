@@ -1,0 +1,47 @@
+# docker-compose.yaml
+version: "3.8"
+
+services:
+  backend:
+    # for dev: builds from your local Dockerfile.backend
+    # for prod: uncomment the next line and comment out the build: block
+    # image: vandadvafai/resume_evaluator-backend:latest
+
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: vandadvafai/resume_evaluator-backend:latest
+
+    # don't hard-name your container locally; let Compose manage it
+    # container_name: resume-backend
+
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    # for dev: builds from your local Dockerfile.frontend
+    # for prod: uncomment the next line and comment out the build: block
+    # image: vandadvafai/resume_evaluator-frontend:latest
+
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    image: vandadvafai/resume_evaluator-frontend:latest
+
+    # container_name: resume-frontend
+
+    environment:
+      # in Docker Compose, 'backend' resolves to the backend service
+      API_URL: "http://backend:8000/evaluate/"
+    ports:
+      - "8501:8501"
+    depends_on:
+      backend:
+        condition: service_healthy

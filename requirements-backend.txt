@@ -5,3 +5,7 @@ openai
 PyPDF2
 python-docx
 python-multipart
+SQLModel
+passlib[bcrypt]
+python-jose[cryptography]
+email-validator
