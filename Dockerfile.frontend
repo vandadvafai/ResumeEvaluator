@@ -1,15 +1,25 @@
 # Dockerfile.frontend
-FROM python:3.11-slim
+# Stage 1: build the React app
+FROM node:18-alpine AS build
 
 WORKDIR /app
 
-# Install deps
-COPY requirements-frontend.txt .
-RUN pip install --no-cache-dir -r requirements-frontend.txt
+# Copy package manifests and install dependencies
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
 
-# Copy UI code
-COPY . .
+# Copy the rest of the React source and build
+COPY frontend/ ./
+RUN npm run build
 
-EXPOSE 8501
-CMD ["streamlit", "run", "streamlit_app.py", \
-     "--server.port=8501", "--server.enableCORS=false"]
+# Stage 2: serve with nginx
+FROM nginx:alpine
+
+# Copy the build output into nginx’s html folder
+COPY --from=build /app/build /usr/share/nginx/html
+
+# Expose port 80 for HTTP
+EXPOSE 80
+
+# Run nginx in foreground
+CMD ["nginx", "-g", "daemon off;"]

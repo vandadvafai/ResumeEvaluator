@@ -1,6 +1,4 @@
 # docker-compose.yaml
-version: "3.8"
-
 services:
   backend:
     # for dev: builds from your local Dockerfile.backend
@@ -11,9 +9,6 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     image: vandadvafai/resume_evaluator-backend:latest
-
-    # don't hard-name your container locally; let Compose manage it
-    # container_name: resume-backend
 
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
@@ -35,13 +30,11 @@ services:
       dockerfile: Dockerfile.frontend
     image: vandadvafai/resume_evaluator-frontend:latest
 
-    # container_name: resume-frontend
-
     environment:
-      # in Docker Compose, 'backend' resolves to the backend service
-      API_URL: "http://backend:8000/evaluate/"
+      # point React at your backend service; React picks this up via process.env.REACT_APP_API_URL
+      - REACT_APP_API_URL=http://backend:8000
     ports:
-      - "8501:8501"
+      - "3000:80"    # maps host port 3000 → container port 80 (nginx)
     depends_on:
       backend:
         condition: service_healthy
